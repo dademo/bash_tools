@@ -10,6 +10,7 @@ ACTION="run"
 CONTAINER_DETACH="--detach"
 CONTAINER_RM="--rm"
 CONTAINER_NAME="jupyter-notebook"
+CONTAINER_EXPOSED_PORT="8888"
 IMAGE_NAME="jupyter/scipy-notebook"
 IMAGE_PULL="always"
 VOLUME_NAME="jupyter-notebook-volume"
@@ -41,6 +42,7 @@ Options:
     --image-pull        Whether to pull the image (any of "always"|"missing"|"never", defaults to "${IMAGE_PULL}")
     --volume-name       Set the persistant volume name (defaults to "${VOLUME_NAME}")
     --follow, -f        Follow the logs (only used with the "logs" option)
+    --pubish, -p        Set the exposed port (run and open commands only)
     --help              Print this help and quit
 EOF
 }
@@ -93,7 +95,7 @@ function action_run() {
         "${CONTAINER_DETACH}" \
         "${CONTAINER_RM}" \
         --pull "${IMAGE_PULL}" \
-        -p 8888:8888 \
+        --publish "${CONTAINER_EXPOSED_PORT}:8888" \
         --name "${CONTAINER_NAME}" \
         -v "${VOLUME_NAME}:/home/jovyan/work" \
         "${IMAGE_NAME}"
@@ -147,7 +149,7 @@ function action_open() {
         return 1
     fi
 
-    URL="$("${CONTAINER_TOOL}" logs "${CONTAINER_NAME}" 2>&1 | grep -e 'http://127.0.0.1' | head -n 1 |  sed -E 's/.+(http:\/\/.+)$/\1/g')"
+    URL="$("${CONTAINER_TOOL}" logs "${CONTAINER_NAME}" 2>&1 | grep -e 'http://127.0.0.1' | head -n 1 |  sed -E "s/.+(http:\/\/.+)$/\1/g; s/8888/${CONTAINER_EXPOSED_PORT}/g")"
 
     if [ -z "${URL}" ]; then
         echo "Unable to get URL from logs"
@@ -223,6 +225,10 @@ while [ $# -gt 0 ]; do
         --follow|-f)
             CONTAINER_LOGS_FOLLOW="--follow"
             shift
+            ;;
+        --port|-p)
+            CONTAINER_EXPOSED_PORT="$2"
+            shift 2
             ;;
         --help)
             help
