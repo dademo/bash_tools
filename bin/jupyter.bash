@@ -13,7 +13,7 @@ CONTAINER_NAME="jupyter-notebook"
 CONTAINER_EXPOSED_PORT="8888"
 IMAGE_NAME="jupyter/scipy-notebook"
 IMAGE_PULL="always"
-VOLUME_NAME="jupyter-notebook-volume"
+CONTAINER_VOLUME_NAME="jupyter-notebook-volume"
 DEFAULT_BROWSER="firefox"
 
 ## OTHER VALUES ##
@@ -28,6 +28,8 @@ Actions:
     run,start           Run the container
     stop                Stop the container
     kill                Kill the container
+    clean               Clean the container (stop and delete storage)
+    status              Get the status of the container
     logs                Get the container logs
     stats               Get the container statistics
     inspect             Inspect the container configuration
@@ -40,7 +42,7 @@ Options:
     --container-name    Set the running container name (defaults to "${CONTAINER_NAME}")
     --image-name        Set the image to run (defaults to "${IMAGE_NAME}")
     --image-pull        Whether to pull the image (any of "always"|"missing"|"never", defaults to "${IMAGE_PULL}")
-    --volume-name       Set the persistant volume name (defaults to "${VOLUME_NAME}")
+    --volume-name       Set the persistant volume name (defaults to "${CONTAINER_VOLUME_NAME}")
     --follow, -f        Follow the logs (only used with the "logs" option)
     --pubish, -p        Set the exposed port (run and open commands only)
     --help              Print this help and quit
@@ -48,19 +50,45 @@ EOF
 }
 
 ## Actions
+function action_run() {
+
+    container_volume_create || true
+
+    if [ -z "$(container_search)" ]; then
+
+        "${CONTAINER_TOOL}" run \
+            "${CONTAINER_DETACH}" \
+            "${CONTAINER_RM}" \
+            --pull "${IMAGE_PULL}" \
+            --publish "${CONTAINER_EXPOSED_PORT}:8888" \
+            --name "${CONTAINER_NAME}" \
+            -v "${CONTAINER_VOLUME_NAME}:/home/jovyan/work" \
+            "${IMAGE_NAME}"
+    
+        if [ -z "${NO_OPEN}" ]; then
+
+            echo "Waiting for the application to start..."
+            sleep 2
+        fi
+    else
+        echo "Container is already running"
+    fi
+    action_open
+    return 0
+}
+
 function action_stop() {
 
     if [ -z "$(container_search)" ]; then
-        echo "Container \"${CONTAINER_NAME}\" not found"
+        echo "Container \"${CONTAINER_NAME}\" not found" 1>&2
         return 1
     fi
 
-    "${CONTAINER_TOOL}" stop "${CONTAINER_NAME}" > /dev/null
-
+    container_stop
     container_clean
 
     if [ $? -ne 0 ]; then
-        echo "An error occured when removing container \"${CONTAINER_NAME}\""
+        echo "An error occured when removing container \"${CONTAINER_NAME}\"" 1>&2
         return 1
     fi
 
@@ -71,7 +99,7 @@ function action_stop() {
 function action_kill() {
 
     if [ -z "$(container_search)" ]; then
-        echo "Container \"${CONTAINER_NAME}\" not found"
+        echo "Container \"${CONTAINER_NAME}\" not found" 1>&2
         return 1
     fi
 
@@ -79,7 +107,7 @@ function action_kill() {
 
     container_clean
     if [ $? -ne 0 ]; then
-        echo "An error occured when removing container \"${CONTAINER_NAME}\""
+        echo "An error occured when removing container \"${CONTAINER_NAME}\"" 1>&2
         return 1
     fi
 
@@ -87,32 +115,34 @@ function action_kill() {
     return 0
 }
 
-function action_run() {
+function action_clean() {
 
-    "${CONTAINER_TOOL}" volume create jupyter-notebook-volume || true
-
-    "${CONTAINER_TOOL}" run \
-        "${CONTAINER_DETACH}" \
-        "${CONTAINER_RM}" \
-        --pull "${IMAGE_PULL}" \
-        --publish "${CONTAINER_EXPOSED_PORT}:8888" \
-        --name "${CONTAINER_NAME}" \
-        -v "${VOLUME_NAME}:/home/jovyan/work" \
-        "${IMAGE_NAME}"
-
-    if [ -z "${NO_OPEN}" ]; then
-
-        echo "Waiting for the application to start..."
-        sleep 2
-        action_open
+    if [ -n "$(container_search)" ]; then
+        echo 'Container is running. You must stop at first'
+        return 1
     fi
+
+    container_clean
+    container_volume_remove
+
+    echo "Jupyter application cleaned"
+}
+
+function action_status() {
+
+    if [ -z "$(container_search)" ]; then
+        echo 'Stopped'
+    else
+        echo 'Running'
+    fi
+
     return 0
 }
 
 function action_logs() {
 
     if [ -z "$(container_search)" ]; then
-        echo "Container \"${CONTAINER_NAME}\" not found"
+        echo "Container \"${CONTAINER_NAME}\" not found" 1>&2
         return 1
     fi
 
@@ -123,7 +153,7 @@ function action_logs() {
 function action_stats() {
 
     if [ -z "$(container_search)" ]; then
-        echo "Container \"${CONTAINER_NAME}\" not found"
+        echo "Container \"${CONTAINER_NAME}\" not found" 1>&2
         return 1
     fi
 
@@ -134,7 +164,7 @@ function action_stats() {
 function action_inspect() {
 
     if [ -z "$(container_search)" ]; then
-        echo "Container \"${CONTAINER_NAME}\" not found"
+        echo "Container \"${CONTAINER_NAME}\" not found" 1>&2
         return 1
     fi
 
@@ -145,14 +175,14 @@ function action_inspect() {
 function action_open() {
 
     if [ -z "$(container_search)" ]; then
-        echo "Container \"${CONTAINER_NAME}\" not found"
+        echo "Container \"${CONTAINER_NAME}\" not found" 1>&2
         return 1
     fi
 
     URL="$("${CONTAINER_TOOL}" logs "${CONTAINER_NAME}" 2>&1 | grep -e 'http://127.0.0.1' | head -n 1 |  sed -E "s/.+(http:\/\/.+)$/\1/g; s/8888/${CONTAINER_EXPOSED_PORT}/g")"
 
     if [ -z "${URL}" ]; then
-        echo "Unable to get URL from logs"
+        echo "Unable to get URL from logs" 1>&2
         return 1
     fi
 
@@ -170,12 +200,20 @@ case "$1" in
         ACTION="stop"
         shift
         ;;
-    logs)
-        ACTION="logs"
-        shift
-        ;;
     kill)
         ACTION="kill"
+        shift
+        ;;
+    clean)
+        ACTION="clean"
+        shift
+        ;;
+    status)
+        ACTION="status"
+        shift
+        ;;
+    logs)
+        ACTION="logs"
         shift
         ;;
     stats)
@@ -219,7 +257,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         --volume-name)
-            VOLUME_NAME="$2"
+            CONTAINER_VOLUME_NAME="$2"
             shift 2
             ;;
         --follow|-f)
@@ -252,6 +290,12 @@ case "${ACTION}" in
     kill)
         action_kill
         ;;
+    clean)
+        action_clean
+        ;;
+    status)
+        action_status
+        ;;
     logs)
         action_logs
         ;;
@@ -270,3 +314,4 @@ case "${ACTION}" in
 esac
 
 exit $?
+
